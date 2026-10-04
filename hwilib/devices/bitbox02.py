@@ -107,6 +107,7 @@ ERR_INVALID_INPUT = 101
 
 PURPOSE_P2WPKH_P2SH = 49 + HARDENED
 PURPOSE_P2WPKH = 84 + HARDENED
+PURPOSE_MULTISIG_P2SH = 45 + HARDENED
 PURPOSE_MULTISIG_P2WSH = 48 + HARDENED
 
 # External GUI tools using hwi.py as a command line tool to integrate hardware wallets usually do
@@ -885,10 +886,13 @@ class Bitbox02Client(HardwareWalletClient):
         simple_type = {
             PURPOSE_P2WPKH: bitbox02.btc.BTCScriptConfig.P2WPKH,
             PURPOSE_P2WPKH_P2SH: bitbox02.btc.BTCScriptConfig.P2WPKH_P2SH,
+            # Use P2WPKH for external service key verification.
+            PURPOSE_MULTISIG_P2SH: bitbox02.btc.BTCScriptConfig.P2WPKH,
+            PURPOSE_MULTISIG_P2WSH: bitbox02.btc.BTCScriptConfig.P2WPKH,
         }.get(purpose)
         if simple_type is None:
             raise BitBox02Error(
-                "For message signing, the keypath bip44 purpose must be 84' or 49'"
+                "For message signing, the keypath purpose must be 84', 49', 45' or 48'"
             )
         _, _, sig65 = self.init().btc_sign_msg(
             self._get_coin(),
