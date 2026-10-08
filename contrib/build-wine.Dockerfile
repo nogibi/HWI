@@ -4,6 +4,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update
 RUN apt-get install -y \
     build-essential \
+    git \
     g++-mingw-w64-x86-64 \
     faketime \
     dos2unix \
