@@ -74,6 +74,9 @@ def is_taproot(script_config: btc.BTCScriptConfigWithKeypath) -> bool:
     return (
         script_config.script_config.WhichOneof("config") == "simple_type"
         and script_config.script_config.simple_type == btc.BTCScriptConfig.P2TR
+    ) or (
+        script_config.script_config.WhichOneof("config") == "policy"
+        and script_config.script_config.policy.policy.startswith("tr(")
     )
 
 
