@@ -1,0 +1,178 @@
+name: Nunchuk release
+
+on:
+  push:
+    tags: ['*']
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Release tag/name to create
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nunchuk-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  LC_ALL: C.UTF-8
+  LANG: C.UTF-8
+  LANGUAGE: C.UTF-8
+
+jobs:
+  linux:
+    name: Linux ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+    runs-on: ${{ matrix.runner }}
+    env:
+      TARGET_ARCH: ${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: contrib/build.Dockerfile
+          tags: nunchuk-hwi-builder
+          load: true
+      - name: Build native CLI
+        run: |
+          test "$(uname -m)" = "$TARGET_ARCH"
+          docker run --rm \
+            --volume "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
+            --workdir "$GITHUB_WORKSPACE" \
+            nunchuk-hwi-builder bash -c '
+              set -e
+              git config --global --add safe.directory "$PWD"
+              contrib/build_bin.sh --without-gui
+            '
+      - name: Stage archive
+        run: |
+          mkdir -p release-dist
+          archive=$(find dist -maxdepth 1 -name "hwi-*-linux-${TARGET_ARCH}.tar.gz" -print -quit)
+          test -n "$archive"
+          cp "$archive" release-dist/
+          tar -tf "$archive"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: nunchuk-linux-${{ matrix.arch }}
+          path: release-dist/*
+          if-no-files-found: error
+
+  macos:
+    name: macOS ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-intel
+            build_arch: x86_64
+            arch: x86_64
+          - runner: macos-15
+            build_arch: arm64
+            arch: aarch64
+    runs-on: ${{ matrix.runner }}
+    env:
+      BUILD_ARCH: ${{ matrix.build_arch }}
+      TARGET_ARCH: ${{ matrix.arch }}
+      PYTHON_CONFIGURE_OPTS: --enable-shared
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build native CLI
+        run: |
+          test "$(uname -m)" = "$BUILD_ARCH"
+          brew install pyenv pyenv-virtualenv libusb
+          export PYENV_ROOT="$HOME/.pyenv"
+          export PATH="$(brew --prefix)/bin:$PYENV_ROOT/bin:$PATH"
+          eval "$(pyenv init --path)"
+          PYTHON_VERSION=$(sed -n 's/^PYTHON_VERSION=//p' contrib/build_bin.sh)
+          test -n "$PYTHON_VERSION"
+          pyenv install -s "$PYTHON_VERSION"
+          pyenv global "$PYTHON_VERSION"
+          ./contrib/build_bin.sh --without-gui
+      - name: Stage archive
+        run: |
+          mkdir -p release-dist
+          archive=$(find dist -maxdepth 1 -name "hwi-*-mac-${BUILD_ARCH}.tar.gz" -print -quit)
+          test -n "$archive"
+          filename=$(basename "$archive")
+          filename="${filename%-${BUILD_ARCH}.tar.gz}-${TARGET_ARCH}.tar.gz"
+          cp "$archive" "release-dist/$filename"
+          tar -tf "$archive"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: nunchuk-mac-${{ matrix.arch }}
+          path: release-dist/*
+          if-no-files-found: error
+
+  windows:
+    name: Windows x86_64
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: contrib/build-wine.Dockerfile
+          tags: nunchuk-hwi-wine-builder
+          load: true
+      - name: Build CLI
+        run: |
+          docker run --rm \
+            --volume "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
+            --workdir "$GITHUB_WORKSPACE" \
+            nunchuk-hwi-wine-builder bash -c '
+              set -e
+              git config --global --add safe.directory "$PWD"
+              contrib/build_wine.sh
+            '
+      - name: Stage CLI archive
+        run: |
+          mkdir -p release-dist
+          archive=$(find dist -maxdepth 1 -name 'hwi-*-windows-x86_64.zip' -print -quit)
+          test -n "$archive"
+          test -f "$archive.dir/hwi.exe"
+          staged_archive="$PWD/release-dist/$(basename "$archive")"
+          (cd "$archive.dir" && zip "$staged_archive" hwi.exe)
+          unzip -l "$staged_archive"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: nunchuk-windows-x86_64
+          path: release-dist/*
+          if-no-files-found: error
+
+  release:
+    needs: [linux, macos, windows]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: nunchuk-*
+          path: release-assets
+          merge-multiple: true
+      - name: Checksums
+        working-directory: release-assets
+        run: sha256sum hwi-* > SHA256SUMS
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+          name: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+          target_commitish: ${{ github.sha }}
+          fail_on_unmatched_files: true
+          files: |
+            release-assets/hwi-*-linux-x86_64.tar.gz
+            release-assets/hwi-*-linux-aarch64.tar.gz
+            release-assets/hwi-*-mac-x86_64.tar.gz
+            release-assets/hwi-*-mac-aarch64.tar.gz
+            release-assets/hwi-*-windows-x86_64.zip
+            release-assets/SHA256SUMS
