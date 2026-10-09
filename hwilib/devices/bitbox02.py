@@ -532,20 +532,20 @@ class Bitbox02Client(HardwareWalletClient):
         multipath_index: int = 0,
     ) -> str:
         descriptor = registered_descriptor.descriptor
-        account_keypath = None
+        keypath = None
         device_fingerprint = self.get_master_fingerprint()
         for pubkey in descriptor.get_pubkey_providers():
             if (
                 pubkey.origin is not None
                 and pubkey.origin.fingerprint == device_fingerprint
             ):
-                account_keypath = pubkey.origin.path
+                keypath = [*pubkey.origin.path, *pubkey.get_deriv_path(index, multipath_index)]
                 break
-        if account_keypath is None:
+        if keypath is None:
             raise BadArgumentError("This BitBox02 is not one of the policy keys")
 
         return self.init().btc_address(
-            [*account_keypath, multipath_index, index],
+            keypath,
             coin=self._get_coin(),
             script_config=self._bip388_script_config(descriptor),
             display=True,
@@ -866,7 +866,8 @@ class Bitbox02Client(HardwareWalletClient):
 
             _, keypath = find_our_key(key_origin_infos)
 
-            is_change = keypath and keypath[-2] == 1
+            # The firmware determines receive/change branches for wallet policies.
+            is_change = keypath and (policy_script_config is not None or keypath[-2] == 1)
             if is_change:
                 assert keypath is not None
                 script_config_index = add_script_config(
