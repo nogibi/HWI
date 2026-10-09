@@ -14,6 +14,7 @@ from ..descriptor import (
     MultisigDescriptor,
     RegisteredDescriptor,
     WSHDescriptor,
+    parse_descriptor,
 )
 from ..hwwclient import HardwareWalletClient
 from ..errors import (
@@ -537,6 +538,22 @@ class ColdcardClient(HardwareWalletClient):
 
     @coldcard_exception
     def register_descriptor(self, name: str, descriptor: 'Descriptor') -> RegisteredDescriptor:
+        if self.is_edge:
+            self.device.check_mitm()
+            names = json.loads(self.device.send_recv(CCProtocolPacker.miniscript_ls()))
+            for registered_name in names:
+                registered = json.loads(self.device.send_recv(CCProtocolPacker.miniscript_get(registered_name)))
+                try:
+                    registered_descriptor = parse_descriptor(registered["desc"])
+                except ValueError:
+                    # An unrelated wallet may use descriptor features HWI does not support.
+                    continue
+                if registered_descriptor.to_string() == descriptor.to_string():
+                    # Signing and address display must use the name stored on the device.
+                    return RegisteredDescriptor(name=registered_name, descriptor=descriptor, device_type="coldcard", registration=b"")
+            if name in names:
+                raise BadArgumentError("A different descriptor is already registered on the Coldcard with this name")
+
         conf = {
             "desc": descriptor.to_string(),
             "name": name

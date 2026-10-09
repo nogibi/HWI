@@ -144,13 +144,13 @@ class CCProtocolPacker:
     @staticmethod
     def miniscript_get(name):
         # get registered miniscript wallet object by name
-        assert 2 <= len(name) <= 40, "name len"
+        assert 1 <= len(name) <= 40, "name len"
         return b'msgt' + name.encode('ascii')
 
     @staticmethod
     def miniscript_address(name, change=False, idx=0):
         # get miniscript address from internal or external chain by id
-        assert 2 <= len(name) <= 40, "name len"
+        assert 1 <= len(name) <= 40, "name len"
         assert 0 <= idx < (2**31), "child idx"
         return pack('<4sII', b'msas', int(change), idx) + name.encode('ascii')
 
