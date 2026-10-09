@@ -149,7 +149,8 @@ def parse_multisig(script: bytes) -> Optional[Tuple[int, Sequence[bytes]]]:
         return None
     offset += 1
     op_cms = script[offset]
-    if op_cms != 174:
+    # OP_CHECKMULTISIG must end the whole script, not just a Miniscript branch.
+    if op_cms != 174 or offset + 1 != len(script):
         return None
 
     return (m, pubkeys)
