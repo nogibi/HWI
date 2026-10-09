@@ -560,7 +560,7 @@ class Bitbox02Client(HardwareWalletClient):
         if not multisig.is_sorted:
             raise BadArgumentError("BitBox02 only supports sortedmulti descriptors")
 
-        path_suffixes = set(p.get_deriv_path(0, 0) for p in multisig.pubkeys)
+        path_suffixes = set(tuple(p.get_deriv_path(0, 0)) for p in multisig.pubkeys)
         if len(path_suffixes) != 1:
             # Path suffix refers to the path after the account-level xpub, usually /<change>/<address>.
             # The BitBox02 currently enforces that all of them are the same.
