@@ -642,6 +642,10 @@ class Bitbox02Client(HardwareWalletClient):
                 script_config=self._bip388_script_config(descriptor),
                 keypath=account_keypath,
             )
+        taproot_policy = (
+            policy_script_config is not None
+            and policy_script_config.script_config.policy.policy.startswith("tr(")
+        )
 
         def find_our_key(
             keypaths: Dict[bytes, KeyOriginInfo]
@@ -752,10 +756,11 @@ class Bitbox02Client(HardwareWalletClient):
             assert psbt_in.prev_out is not None
             assert psbt_in.sequence is not None
 
-            if psbt_in.sighash and psbt_in.sighash != 1:
+            expected_sighash = 0 if taproot_policy else 1
+            if psbt_in.sighash and psbt_in.sighash != expected_sighash:
                 raise BadArgumentError(
-                    "The BitBox02 only supports SIGHASH_ALL. Found sighash: {}".format(
-                        psbt_in.sighash
+                    "The BitBox02 only supports {} for this input. Found sighash: {}".format(
+                        "SIGHASH_DEFAULT" if taproot_policy else "SIGHASH_ALL", psbt_in.sighash
                     )
                 )
 
@@ -788,10 +793,10 @@ class Bitbox02Client(HardwareWalletClient):
                 raise BadArgumentError("No utxo found for input {}".format(input_index))
 
             key_origin_infos = psbt_in.hd_keypaths.copy()
-            if len(psbt_in.tap_internal_key) > 0:
+            if psbt_in.tap_bip32_paths:
                 # adding taproot keys to the keypaths to be checked
                 for pubkey, (leaf_hashes, key_origin_info) in psbt_in.tap_bip32_paths.items():
-                    if len(leaf_hashes) > 0:
+                    if len(leaf_hashes) > 0 and policy_script_config is None:
                         raise BadArgumentError(
                             "The BitBox02 does not support Taproot script path spending. Found leaf hashes: {}"
                             .format(leaf_hashes)
@@ -803,6 +808,10 @@ class Bitbox02Client(HardwareWalletClient):
             if not found_pubkey:
                 raise BadArgumentError("No key found for input {}".format(input_index))
             assert keypath is not None
+            if found_pubkey in psbt_in.tap_bip32_paths:
+                leaf_hashes, _ = psbt_in.tap_bip32_paths[found_pubkey]
+                if len(leaf_hashes) != (0 if found_pubkey == psbt_in.tap_internal_key else 1):
+                    raise BadArgumentError("BitBox02 requires each Taproot key to identify a unique spend path")
             found_pubkeys.append(found_pubkey)
 
             if bip44_account is None:
@@ -854,10 +863,10 @@ class Bitbox02Client(HardwareWalletClient):
             tx_out = psbt_out.get_txout()
 
             key_origin_infos = psbt_out.hd_keypaths.copy()
-            if len(psbt_out.tap_internal_key) > 0:
+            if psbt_out.tap_bip32_paths:
                 # adding taproot keys to the keypaths to be checked
                 for pubkey, (leaf_hashes, key_origin_info) in psbt_out.tap_bip32_paths.items():
-                    if len(leaf_hashes) > 0:
+                    if len(leaf_hashes) > 0 and policy_script_config is None:
                         raise BadArgumentError(
                             "The BitBox02 does not support Taproot script path spending. Found leaf hashes: {}"
                             .format(leaf_hashes)
@@ -933,9 +942,12 @@ class Bitbox02Client(HardwareWalletClient):
         for (_, sig), pubkey, psbt_in in zip(sigs, found_pubkeys, psbt.inputs):
             r, s = sig[:32], sig[32:64]
 
-            if len(psbt_in.tap_internal_key) > 0:
-                # taproot keypath input
-                psbt_in.tap_key_sig = sig
+            if pubkey in psbt_in.tap_bip32_paths:
+                leaf_hashes, _ = psbt_in.tap_bip32_paths[pubkey]
+                if leaf_hashes:
+                    psbt_in.tap_script_sigs[(pubkey, next(iter(leaf_hashes)))] = sig
+                else:
+                    psbt_in.tap_key_sig = sig
             else:
                 # ser_sig_der() adds SIGHASH_ALL
                 psbt_in.partial_sigs[pubkey] = ser_sig_der(r, s)
