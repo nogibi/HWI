@@ -609,16 +609,17 @@ class Bitbox02Client(HardwareWalletClient):
         long as the keypaths use the appropriate bip44 purpose field per input (e.g. `49'` and `84'`) and
         all account indexes are the same.
 
+        Registered policies with multiple owned accounts are signed in separate passes.
+
         Transactions with legacy inputs are not supported.
         """
-        policy_script_config: Optional[bitbox02.btc.BTCScriptConfigWithKeypath] = None
         if registered_descriptors:
             if len(registered_descriptors) > 1:
                 raise BadArgumentError("The BitBox02 can only sign with one registered policy at a time")
             registered_descriptor = next(iter(registered_descriptors))
             descriptor = registered_descriptor.descriptor
             device_fingerprint = self.get_master_fingerprint()
-            account_keypath = None
+            account_keypaths: List[Sequence[int]] = []
             for pubkey in descriptor.get_pubkey_providers():
                 if (
                     pubkey.origin is None
@@ -632,16 +633,44 @@ class Bitbox02Client(HardwareWalletClient):
                     pubkey.extkey.serialize(),
                 ):
                     continue
-                if account_keypath is not None:
-                    raise BadArgumentError("This BitBox02 occurs more than once in the policy")
-                account_keypath = pubkey.origin.path
-            if account_keypath is None:
+                if pubkey.origin.path not in account_keypaths:
+                    account_keypaths.append(pubkey.origin.path)
+            if not account_keypaths:
                 raise BadArgumentError("This BitBox02 is not one of the policy keys")
 
-            policy_script_config = bitbox02.btc.BTCScriptConfigWithKeypath(
-                script_config=self._bip388_script_config(descriptor),
-                keypath=account_keypath,
-            )
+            # A Taproot PSBT may only include keys for the selected spend path.
+            input_account_keypaths: Set[Tuple[int, ...]] = set()
+            for psbt_in in psbt.inputs:
+                origins = list(psbt_in.hd_keypaths.values())
+                origins.extend(origin for _, origin in psbt_in.tap_bip32_paths.values())
+                input_account_keypaths.update(
+                    tuple(origin.path[:-2]) for origin in origins
+                    if origin.fingerprint == device_fingerprint
+                )
+            account_keypaths = [
+                path for path in account_keypaths if tuple(path) in input_account_keypaths
+            ]
+            if not account_keypaths:
+                raise BadArgumentError("No BitBox02 policy key found in the transaction inputs")
+
+            # The firmware requires one policy account keypath per signing pass.
+            script_config = self._bip388_script_config(descriptor)
+            for account_keypath in account_keypaths:
+                self._sign_tx(
+                    psbt,
+                    bitbox02.btc.BTCScriptConfigWithKeypath(
+                        script_config=script_config,
+                        keypath=account_keypath,
+                    ),
+                )
+            return psbt
+        return self._sign_tx(psbt)
+
+    def _sign_tx(
+        self,
+        psbt: PSBT,
+        policy_script_config: Optional[bitbox02.btc.BTCScriptConfigWithKeypath] = None,
+    ) -> PSBT:
         taproot_policy = (
             policy_script_config is not None
             and policy_script_config.script_config.policy.policy.startswith("tr(")
@@ -659,6 +688,11 @@ class Bitbox02Client(HardwareWalletClient):
             for pubkey, origin in keypaths.items():
                 # Cheap check if the key is ours.
                 if origin.fingerprint != master_fp:
+                    continue
+                if (
+                    policy_script_config is not None
+                    and tuple(origin.path[:-2]) != tuple(policy_script_config.keypath)
+                ):
                     continue
 
                 # Expensive check if the key is ours.
@@ -748,7 +782,7 @@ class Bitbox02Client(HardwareWalletClient):
         bip44_account = None
 
         # One pubkey per input. The pubkey identifies the key per input with which we sign. There
-        # must be exactly one pubkey per input that belongs to the BitBox02.
+        # must be exactly one pubkey per input for the current signing pass.
         found_pubkeys: List[bytes] = []
 
         for input_index, psbt_in in builtins.enumerate(psbt.inputs):
