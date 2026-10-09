@@ -13,6 +13,7 @@ from ..descriptor import (
     Descriptor,
     MultisigDescriptor,
     RegisteredDescriptor,
+    SHDescriptor,
     WSHDescriptor,
     parse_descriptor,
 )
@@ -398,6 +399,44 @@ class ColdcardClient(HardwareWalletClient):
 
         redeem_script += (80 + len(multisig.pubkeys)).to_bytes(1, byteorder="little")
         redeem_script += b"\xae"
+
+        if self.is_edge:
+            # Edge replaces p2sh with msas, which needs a stored wallet name.
+            if len(xfp_paths[0]) < 2 or xfp_paths[0][-1] >= 2**31:
+                raise BadArgumentError("A non-hardened address index is required to display a multisig address on Coldcard Edge")
+            index = xfp_paths[0][-1]
+            names = json.loads(self.device.send_recv(CCProtocolPacker.miniscript_ls()))
+            for name in names:
+                registered = json.loads(self.device.send_recv(CCProtocolPacker.miniscript_get(name)))
+                try:
+                    descriptor = parse_descriptor(registered["desc"])
+                except ValueError:
+                    # Skip unrelated wallets using unsupported descriptor features.
+                    continue
+                if descriptor.get_address_type() != addr_type:
+                    continue
+                candidate = descriptor
+                if isinstance(candidate, SHDescriptor):
+                    candidate = candidate.subdescriptors[0]
+                if isinstance(candidate, WSHDescriptor):
+                    candidate = candidate.subdescriptors[0]
+                if (
+                    not isinstance(candidate, MultisigDescriptor)
+                    or not candidate.is_sorted
+                    or candidate.thresh != multisig.thresh
+                    or len(candidate.pubkeys) != len(multisig.pubkeys)
+                ):
+                    continue
+                for change in (0, 1):
+                    # Match every key in the requested multisig script before displaying it.
+                    keys = sorted(p.get_pubkey_bytes(index, change) for p in candidate.pubkeys)
+                    if keys == [pk for pk, _ in sorted_keys]:
+                        return self.display_bip388_policy_address(
+                            RegisteredDescriptor(name=name, descriptor=descriptor, device_type="coldcard", registration=b""),
+                            index,
+                            change,
+                        )
+            raise BadArgumentError("No matching registered multisig wallet found on the Coldcard")
 
         payload = CCProtocolPacker.show_p2sh_address(multisig.thresh, xfp_paths, redeem_script, addr_fmt=addr_fmt)
 
