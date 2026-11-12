@@ -662,7 +662,21 @@ class TrezorClient(HardwareWalletClient):
     def sign_message(self, message: Union[str, bytes], keypath: str) -> str:
         self._check_unlocked()
         path = parse_path(keypath)
-        result = btc.sign_message(self.client, self.coin_name, path, message)
+        script_type = messages.InputScriptType.SPENDADDRESS
+        if path and path[0] == (0x80000000 | 49):
+            script_type = messages.InputScriptType.SPENDP2SHWITNESS
+        elif path and path[0] == (0x80000000 | 84):
+            script_type = messages.InputScriptType.SPENDWITNESS
+        elif len(path) >= 4 and path[0] == (0x80000000 | 48):
+            if path[3] == (0x80000000 | 1):
+                script_type = messages.InputScriptType.SPENDP2SHWITNESS
+            elif path[3] == (0x80000000 | 2):
+                script_type = messages.InputScriptType.SPENDWITNESS
+        # Preserve the legacy Bitcoin Core signature header.
+        result = btc.sign_message(
+            self.client, self.coin_name, path, message,
+            script_type=script_type, no_script_type=True,
+        )
         return base64.b64encode(result.signature).decode('utf-8')
 
     @trezor_exception
