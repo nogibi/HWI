@@ -57,18 +57,20 @@ class PairingProtocolTest(unittest.TestCase):
                 self.answer = callback('enter_code', None)
             def close(self):
                 self.closed = True
-        client = Client()
-        output = io.StringIO()
-        with patch.object(_cli, 'get_client', return_value=client), \
-             patch('sys.argv', ['hwi', '-t', 'trezor', '-d', 'test device path', 'pair', '--stdio']), \
-             patch('sys.stdin', io.StringIO('{"accept":true,"code":"012345"}\n')), patch('sys.stdout', output):
-            _cli.main()
-        messages = [json.loads(line) for line in output.getvalue().splitlines()]
-        self.assertEqual(len(messages), 2)
-        self.assertEqual(messages[0]['event'], 'pairing_required')
-        self.assertEqual(messages[1], {'success': True})
-        self.assertEqual(client.answer, '012345')
-        self.assertTrue(client.closed)
+        for extra_args in ([], ['--stdio']):
+            with self.subTest(extra_args=extra_args):
+                client = Client()
+                output = io.StringIO()
+                with patch.object(_cli, 'get_client', return_value=client), \
+                     patch('sys.argv', ['hwi', '-t', 'trezor', '-d', 'test device path', 'pair'] + extra_args), \
+                     patch('sys.stdin', io.StringIO('{"accept":true,"code":"012345"}\n')), patch('sys.stdout', output):
+                    _cli.main()
+                messages = [json.loads(line) for line in output.getvalue().splitlines()]
+                self.assertEqual(len(messages), 2)
+                self.assertEqual(messages[0]['event'], 'pairing_required')
+                self.assertEqual(messages[1], {'success': True})
+                self.assertEqual(client.answer, '012345')
+                self.assertTrue(client.closed)
 
     def test_cli_closes_client_on_rejection(self):
         from unittest.mock import Mock
@@ -76,13 +78,13 @@ class PairingProtocolTest(unittest.TestCase):
         client.pair_device.side_effect = lambda callback: callback('confirm_code', 'CODE')
         with patch.object(_cli, 'get_client', return_value=client), \
              patch('sys.stdin', io.StringIO('{"accept":false}\n')), patch('sys.stdout', io.StringIO()):
-            result = _cli.process_commands(['-t', 'bitbox02', '-d', 'example', 'pair', '--stdio'])
+            result = _cli.process_commands(['-t', 'bitbox02', '-d', 'example', 'pair'])
         self.assertEqual(result['code'], -14)
         client.close.assert_called_once()
 
     def test_pairing_needs_path_without_auto_enumeration(self):
         with patch.object(_cli, 'find_device') as find:
-            result = _cli.process_commands(['-t', 'trezor', 'pair', '--stdio'])
+            result = _cli.process_commands(['-t', 'trezor', 'pair'])
         self.assertEqual(result['code'], -2)
         find.assert_not_called()
 
@@ -111,7 +113,7 @@ class PairingProtocolTest(unittest.TestCase):
         client = Mock()
         output = io.StringIO()
         with patch.object(_cli, 'get_client', return_value=client), \
-             patch('sys.argv', ['hwi', '-t', 'trezor', '-d', 'example', 'pair', '--stdio']), \
+             patch('sys.argv', ['hwi', '-t', 'trezor', '-d', 'example', 'pair']), \
              patch('sys.stdin', None), patch('sys.stdout', output):
             _cli.main()
         self.assertEqual(output.getvalue(), '{"success": true}\n')

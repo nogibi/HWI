@@ -173,7 +173,7 @@ def get_parser() -> HWIArgumentParser:
     enumerate_parser.set_defaults(func=enumerate_handler)
 
     pair_parser = subparsers.add_parser('pair', help='Pair a device through newline-delimited JSON on stdin/stdout')
-    pair_parser.add_argument('--stdio', action='store_true', required=True, help='Exchange pairing messages with a parent application')
+    pair_parser.add_argument('--stdio', action='store_true', help='Optional compatibility flag; pairing always uses JSON on stdin/stdout')
     pair_parser.set_defaults(func=pair_device_handler)
 
     getmasterxpub_parser = subparsers.add_parser('getmasterxpub', help='Get the extended public key for BIP 44 standard derivation paths. Convenience function to get xpubs given the address type, account, and chain type.')

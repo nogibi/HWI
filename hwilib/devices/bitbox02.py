@@ -121,7 +121,7 @@ PURPOSE_MULTISIG_P2WSH = 48 + HARDENED
 # not have an actual terminal for IO.
 _using_external_gui = sys.stdout is None or not sys.stdout.isatty() or sys.stdin is None or not sys.stdin.isatty()
 if _using_external_gui:
-    _unpaired_errmsg = "Device not paired yet. Use 'pair --stdio' to pair with this application."
+    _unpaired_errmsg = "Device not paired yet. Use 'pair' to pair with this application."
 else:
     _unpaired_errmsg = "Device not paired yet. Please use any subcommand to pair"
 

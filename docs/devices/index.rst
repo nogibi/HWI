@@ -92,12 +92,15 @@ Unpaired Trezor THP and BitBox02 devices report ``PAIRING_REQUIRED`` (``-20``)
 and ``needs_pairing: true``. Enumeration includes their type, path, and model
 without requiring a fingerprint. The parent application can then launch::
 
-    hwi -t trezor -d <device-path> pair --stdio
+    hwi -t trezor -d <device-path> pair
 
 Use ``-t bitbox02`` for a BitBox02. An explicit type and path are required;
 do not use ``-f`` or the global ``--stdin`` argument-input option for pairing.
 Keep this same child process alive until pairing finishes. HWI does not spawn
 a helper process or a server.
+
+``pair`` always uses the JSON protocol below. The optional ``--stdio`` flag is
+accepted for compatibility and does not change its behavior.
 
 Each message is one newline-terminated JSON object. HWI flushes its request
 on stdout before waiting for a response on stdin. Both devices use the same

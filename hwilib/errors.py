@@ -74,7 +74,7 @@ class HWWError(Exception):
         return self.msg
 
 class PairingRequiredError(HWWError):
-    def __init__(self, msg: str = "Device requires pairing. Use 'pair --stdio'.", model: Optional[str] = None):
+    def __init__(self, msg: str = "Device requires pairing. Use 'pair'.", model: Optional[str] = None):
         super().__init__(msg, PAIRING_REQUIRED)
         self.model = model
 
