@@ -63,6 +63,26 @@ The table below lists what devices and features are supported for each device.
 
 \* There are some caveats. See the `sign_tx` for these devices.
 
+Trezor Safe 7 and THP
+====================
+
+Trezor Safe 7 uses Trezor-Host Protocol (THP). HWI selects THP when a device
+explicitly rejects the legacy protocol. Older Trezors and KeepKey continue
+using the vendored legacy client. THP uses the upstream ``trezor`` Python
+dependency included with HWI and supports USB connections and UDP emulators.
+Bluetooth transport is not included.
+
+On the first connection, approve HWI on the Trezor and enter its six-digit
+pairing code at the terminal prompt. Pairing prompts go to stderr so command
+results on stdout remain JSON. Pairing credentials are stored in the OS
+keyring under ``hwi.trezor-thp``. If a keyring is unavailable, credentials
+remain in memory for the current process; subsequent processes may need to
+pair again. PINs and wallet passphrases are entered on the device.
+
+Applications using the Python API can supply a ``pairing_code_callback`` to
+``hwilib.devices.trezor.TrezorClient``. It takes no arguments and returns the
+six-digit code as a string. Without this callback, HWI uses a terminal prompt.
+
 Support Policy
 ================
 

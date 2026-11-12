@@ -291,6 +291,8 @@ class TrezorClient:
         device state.
         """
         resp = self.call_raw(messages.GetFeatures())
+        if isinstance(resp, messages.Failure):
+            raise exceptions.TrezorFailure(resp)
         if not isinstance(resp, messages.Features):
             raise exceptions.TrezorException("Unexpected response to GetFeatures")
         self._refresh_features(resp)

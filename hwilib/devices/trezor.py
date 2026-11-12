@@ -5,6 +5,7 @@ Trezor Devices
 
 from functools import wraps
 from typing import (
+    TYPE_CHECKING,
     Any,
     Callable,
     Dict,
@@ -94,6 +95,9 @@ import builtins
 import getpass
 import logging
 import sys
+
+if TYPE_CHECKING:
+    from ._trezor_thp import TrezorThpClient
 
 py_enumerate = enumerate # Need to use the enumerate built-in but there's another function already named that
 
@@ -292,11 +296,14 @@ class TrezorClient(HardwareWalletClient):
         hid_ids: Set[Tuple[int, int]] = HID_IDS,
         webusb_ids: Set[Tuple[int, int]] = WEBUSB_IDS,
         sim_path: str = SIMULATOR_PATH,
-        model: Optional[TrezorModel] = None
+        model: Optional[TrezorModel] = None,
+        pairing_code_callback: Optional[Callable[[], str]] = None,
     ) -> None:
         if password is None:
             password = ""
         super(TrezorClient, self).__init__(path, password, expert, chain)
+        self._thp_client: Optional['TrezorThpClient'] = None
+        self._pairing_code_callback = pairing_code_callback
         self.simulator = False
         transport = get_path_transport(path, hid_ids, webusb_ids, sim_path)
         if path.startswith('udp'):
@@ -316,7 +323,29 @@ class TrezorClient(HardwareWalletClient):
 
     def _prepare_device(self) -> None:
         self.coin_name = 'Bitcoin' if self.chain == Chain.MAIN else 'Testnet'
-        resp = self.client.refresh_features()
+        try:
+            resp = self.client.refresh_features()
+        except TrezorFailure as e:
+            if e.code != messages.FailureType.InvalidProtocol or self.type != 'Trezor' or self._thp_client is not None:
+                raise
+            # THP devices explicitly reject protocol v1. Do not switch protocols
+            # on timeouts, disconnects, or other errors from a legacy device.
+            transport = self.client.transport
+            self.client.close()
+            try:
+                from ._trezor_thp import TrezorThpClient
+            except ImportError as import_error:
+                raise UnavailableActionError(
+                    "This Trezor requires THP. Install HWI's trezor>=0.20.2,<0.21 dependency."
+                ) from import_error
+            self._thp_client = TrezorThpClient(
+                transport, PassphraseUI(self.password or ""), self._pairing_code_callback,
+            )
+            self.client = self._thp_client
+            resp = self.client.features
+        if self._thp_client is not None:
+            self._thp_client.ensure_unlocked()
+            return
         # If this is a Trezor One or Keepkey, do Initialize
         if resp.model == '1' or resp.model == 'K1-14AM':
             self.client.init_device()
@@ -327,7 +356,7 @@ class TrezorClient(HardwareWalletClient):
             except TrezorFailure:
                 self.client.init_device()
 
-    def _check_unlocked(self) -> None:
+    def _check_unlocked(self, *, wallet_session: bool = True) -> None:
         self._prepare_device()
         if messages.Capability.PassphraseEntry in self.client.features.capabilities and isinstance(self.client.ui, PassphraseUI):
             self.client.ui.disallow_passphrase()
@@ -335,6 +364,8 @@ class TrezorClient(HardwareWalletClient):
             raise DeviceNotReadyError('{} is locked. Unlock by using \'promptpin\' and then \'sendpin\'.'.format(self.type))
         if self.client.features.passphrase_protection and self.password is None:
             raise NoPasswordError("Passphrase protection is enabled, passphrase must be provided")
+        if wallet_session and self._thp_client is not None:
+            self._thp_client.ensure_wallet_session()
 
     def _supports_external(self) -> bool:
         if self.client.features.model == "1" and self.client.version <= (1, 10, 5):
@@ -775,6 +806,11 @@ class TrezorClient(HardwareWalletClient):
     @trezor_exception
     def setup_device(self, label: str = "", passphrase: str = "") -> bool:
         self._prepare_device()
+        if self._thp_client is not None:
+            if self.client.features.initialized:
+                raise DeviceAlreadyInitError('Device is already initialized. Use wipe first and try again')
+            self._thp_client.setup_device(label, bool(self.password))
+            return True
         if not self.simulator:
             # Use interactive_get_pin
             self.client.ui.get_pin = MethodType(interactive_get_pin, self.client.ui)
@@ -786,13 +822,19 @@ class TrezorClient(HardwareWalletClient):
 
     @trezor_exception
     def wipe_device(self) -> bool:
-        self._check_unlocked()
+        self._check_unlocked(wallet_session=False)
+        if self._thp_client is not None:
+            self._thp_client.wipe_device()
+            return True
         device.wipe(self.client)
         return True
 
     @trezor_exception
     def restore_device(self, label: str = "", word_count: int = 24) -> bool:
         self._prepare_device()
+        if self._thp_client is not None:
+            self._thp_client.restore_device(label, word_count, bool(self.password))
+            return True
         if not self.simulator:
             # Use interactive_get_pin
             self.client.ui.get_pin = MethodType(interactive_get_pin, self.client.ui)
@@ -810,7 +852,10 @@ class TrezorClient(HardwareWalletClient):
 
     @trezor_exception
     def close(self) -> None:
-        self.client.close()
+        if self._thp_client is not None:
+            self._thp_client.disconnect()
+        else:
+            self.client.close()
 
     @trezor_exception
     def prompt_pin(self) -> bool:
@@ -833,6 +878,8 @@ class TrezorClient(HardwareWalletClient):
             raise BadArgumentError("Non-numeric PIN provided")
         resp = self.client.call_raw(messages.PinMatrixAck(pin=pin))
         if isinstance(resp, messages.Failure):
+            if resp.code == messages.FailureType.InvalidProtocol:
+                raise UnavailableActionError('Enter the PIN on your Trezor device; THP does not support host PIN entry')
             self.client.features = self.client.call_raw(messages.GetFeatures())
             if isinstance(self.client.features, messages.Features):
                 if not self.client.features.pin_protection:
@@ -848,7 +895,10 @@ class TrezorClient(HardwareWalletClient):
 
     @trezor_exception
     def toggle_passphrase(self) -> bool:
-        self._check_unlocked()
+        self._check_unlocked(wallet_session=False)
+        if self._thp_client is not None:
+            self._thp_client.toggle_passphrase()
+            return True
         try:
             device.apply_settings(self.client, use_passphrase=not self.client.features.passphrase_protection)
         except Exception:

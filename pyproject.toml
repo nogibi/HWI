@@ -19,6 +19,8 @@ dependencies = [
     "semver>=3.0.1,<4.0",
     "noiseprotocol>=0.3.1,<0.4.0",
     "protobuf>=4.23.3",
+    "trezor>=0.20.2,<0.21",
+    "keyring>=25.7.0",
 ]
 
 [project.optional-dependencies]

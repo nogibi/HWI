@@ -96,6 +96,7 @@ class FailureType(IntEnum):
     PinMismatch = 12
     WipeCodeMismatch = 13
     InvalidSession = 14
+    InvalidProtocol = 17
     FirmwareError = 99
 
 
