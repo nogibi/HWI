@@ -53,8 +53,10 @@ class PairingProtocolTest(unittest.TestCase):
     def test_cli_uses_one_client_for_request_and_final_result(self):
         class Client:
             closed = False
+
             def pair_device(self, callback):
                 self.answer = callback('enter_code', None)
+
             def close(self):
                 self.closed = True
         for extra_args in ([], ['--stdio']):
@@ -88,16 +90,87 @@ class PairingProtocolTest(unittest.TestCase):
         self.assertEqual(result['code'], -2)
         find.assert_not_called()
 
+    def test_trezor_keeps_code_entry_callback(self):
+        from hwilib.devices.trezor import TrezorClient
+        from unittest.mock import Mock
+        client = TrezorClient.__new__(TrezorClient)
+        client._thp_client = Mock()
+        callback = Mock(wraps=request_pairing)
+        output = io.StringIO()
+
+        def prepare_device():
+            self.assertTrue(client._allow_pairing)
+            self.assertEqual(client._pairing_code_callback(), '012345')
+
+        with patch.object(client, '_prepare_device', side_effect=prepare_device), \
+             patch('sys.stdin', io.StringIO('{"accept":true,"code":"012345"}\n')), \
+             patch('sys.stdout', output):
+            client.pair_device(callback)
+        callback.assert_called_once_with('enter_code', None)
+        self.assertEqual(json.loads(output.getvalue()), {
+            'event': 'pairing_required', 'method': 'enter_code', 'code': None,
+        })
+
     def test_bitbox_requires_gui_and_device_confirmation(self):
+        from hwilib.devices.bitbox02 import AppNoiseConfig
+        from unittest.mock import Mock
+        for host_accepts, device_accepts in ((True, True), (True, False), (False, True), (False, False)):
+            with self.subTest(host_accepts=host_accepts, device_accepts=device_accepts):
+                response = json.dumps({'accept': host_accepts, 'code': None}) + '\n'
+                device_response = Mock(return_value=device_accepts)
+                with patch('sys.stdin', io.StringIO(response)), patch('sys.stdout', io.StringIO()):
+                    if host_accepts and device_accepts:
+                        self.assertTrue(AppNoiseConfig(request_pairing).show_pairing('CODE', device_response))
+                    else:
+                        with self.assertRaises(ActionCanceledError):
+                            AppNoiseConfig(request_pairing).show_pairing('CODE', device_response)
+                device_response.assert_called_once()
+
+    def test_bitbox_displays_code_before_host_can_accept(self):
+        from hwilib.devices.bitbox02 import AppNoiseConfig
+        from unittest.mock import Mock
+        code = 'ABCDE FGHIJ\nKLMNO PQRST'
+        output = io.StringIO()
+        device_displayed = False
+
+        def device_response():
+            nonlocal device_displayed
+            self.assertEqual(json.loads(output.getvalue()), {
+                'event': 'pairing_required', 'method': 'confirm_code', 'code': code,
+            })
+            flush.assert_called_once()
+            input_stream.readline.assert_not_called()
+            device_displayed = True
+            return True
+
+        def host_response(_limit):
+            self.assertTrue(device_displayed, 'Host cannot compare codes before the device displays one')
+            return '{"accept":true,"code":null}\n'
+
+        input_stream = Mock()
+        input_stream.readline.side_effect = host_response
+        with patch('sys.stdin', input_stream), patch('sys.stdout', output), \
+             patch.object(output, 'flush', wraps=output.flush) as flush:
+            self.assertTrue(AppNoiseConfig(request_pairing).show_pairing(code, device_response))
+        input_stream.readline.assert_called_once()
+
+    def test_bitbox_device_rejection_does_not_wait_for_host(self):
+        from hwilib.devices.bitbox02 import AppNoiseConfig
+        from unittest.mock import Mock
+        input_stream = Mock()
+        with patch('sys.stdin', input_stream), patch('sys.stdout', io.StringIO()), \
+             self.assertRaises(ActionCanceledError):
+            AppNoiseConfig(request_pairing).show_pairing('CODE', lambda: False)
+        input_stream.readline.assert_not_called()
+
+    def test_bitbox_cannot_pair_without_device_confirmation(self):
         from hwilib.devices.bitbox02 import AppNoiseConfig
         from unittest.mock import Mock
         callback = Mock(return_value='')
         device_response = Mock(return_value=True)
-        self.assertTrue(AppNoiseConfig(callback).show_pairing('CODE', device_response))
-        callback.assert_called_once_with('confirm_code', 'CODE')
-        device_response.assert_called_once()
         with self.assertRaises(ActionCanceledError):
-            AppNoiseConfig(callback).show_pairing('CODE', lambda: False)
+            AppNoiseConfig(callback).show_pairing('CODE', device_response)
+        device_response.assert_not_called()
 
     def test_bitbox_rejection_does_not_wait_for_device(self):
         from hwilib.devices.bitbox02 import AppNoiseConfig

@@ -174,8 +174,18 @@ class AppNoiseConfig(CLINoiseConfig):
         self.pairing_callback = pairing_callback
 
     def show_pairing(self, code: str, device_response: Callable[[], bool]) -> bool:
-        self.pairing_callback("confirm_code", code)
-        if not device_response():
+        device_confirmed = False
+
+        def confirm_device() -> None:
+            nonlocal device_confirmed
+            # This call opens the device's pairing screen and waits for its
+            # confirmation, so it must run before waiting for the host reply.
+            device_confirmed = device_response()
+            if not device_confirmed:
+                raise ActionCanceledError("Pairing rejected on BitBox02")
+
+        self.pairing_callback("confirm_code", code, confirm_device)
+        if not device_confirmed:
             raise ActionCanceledError("Pairing rejected on BitBox02")
         return True
 

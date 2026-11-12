@@ -2,15 +2,20 @@
 
 import json
 import sys
-from typing import Callable, Optional
+from typing import Callable, Optional, Protocol
 
 from .errors import ActionCanceledError, BadArgumentError
 
 
-PairingCallback = Callable[[str, Optional[str]], str]
+class PairingCallback(Protocol):
+    def __call__(self, method: str, code: Optional[str],
+                 on_prompt: Optional[Callable[[], None]] = None) -> str:
+        """Show the prompt, invoke on_prompt, then obtain the user's response."""
+        ...
 
 
-def request_pairing(method: str, code: Optional[str]) -> str:
+def request_pairing(method: str, code: Optional[str],
+                    on_prompt: Optional[Callable[[], None]] = None) -> str:
     """Exchange one newline-delimited JSON request/response with a parent app.
 
     The caller keeps the device connection open until this callback returns.
@@ -18,6 +23,8 @@ def request_pairing(method: str, code: Optional[str]) -> str:
     """
     print(json.dumps({"event": "pairing_required", "method": method, "code": code}), flush=True)
     try:
+        if on_prompt is not None:
+            on_prompt()
         line = sys.stdin.readline(4097) if sys.stdin is not None else ""
     except KeyboardInterrupt:
         raise ActionCanceledError("Pairing canceled") from None
