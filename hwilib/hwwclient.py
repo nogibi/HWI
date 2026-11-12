@@ -23,6 +23,8 @@ from .key import (
 )
 from .psbt import PSBT
 from .common import AddressType, Chain
+from ._pairing import PairingCallback
+from .errors import UnavailableActionError
 
 
 class HardwareWalletClient(object):
@@ -48,6 +50,10 @@ class HardwareWalletClient(object):
         # {bip32_path: <xpub string>}
         self.xpub_cache: Dict[str, str] = {}
         self.expert = expert
+
+    def pair_device(self, pairing_callback: PairingCallback) -> None:
+        """Pair this application with the device using the supplied UI callback."""
+        raise UnavailableActionError("This device does not support application pairing")
 
     def get_master_xpub(self, addrtype: AddressType = AddressType.WIT, account: int = 0) -> ExtendedKey:
         """

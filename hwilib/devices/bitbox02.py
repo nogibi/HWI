@@ -51,6 +51,7 @@ from ..errors import (
     ActionCanceledError,
     BadArgumentError,
     DeviceNotReadyError,
+    PairingRequiredError,
     UnavailableActionError,
     DEVICE_NOT_INITIALIZED,
     handle_errors,
@@ -60,6 +61,7 @@ from ..key import (
     KeyOriginInfo,
     parse_path,
 )
+from .._pairing import PairingCallback
 from ..common import (
     AddressType,
     Chain,
@@ -117,9 +119,9 @@ PURPOSE_MULTISIG_P2WSH = 48 + HARDENED
 
 # External GUI tools using hwi.py as a command line tool to integrate hardware wallets usually do
 # not have an actual terminal for IO.
-_using_external_gui = sys.stdout is not None and not sys.stdout.isatty()
+_using_external_gui = sys.stdout is None or not sys.stdout.isatty() or sys.stdin is None or not sys.stdin.isatty()
 if _using_external_gui:
-    _unpaired_errmsg = "Device not paired yet. Please pair using the BitBoxApp, then close the BitBoxApp and try again."
+    _unpaired_errmsg = "Device not paired yet. Use 'pair --stdio' to pair with this application."
 else:
     _unpaired_errmsg = "Device not paired yet. Please use any subcommand to pair"
 
@@ -133,7 +135,7 @@ class SilentNoiseConfig(util.BitBoxAppNoiseConfig):
     """
 
     def show_pairing(self, code: str, device_response: Callable[[], bool]) -> bool:
-        raise DeviceNotReadyError(_unpaired_errmsg)
+        raise PairingRequiredError(_unpaired_errmsg)
 
     def attestation_check(self, result: bool) -> None:
         pass
@@ -144,12 +146,9 @@ class CLINoiseConfig(util.BitBoxAppNoiseConfig):
 
     def show_pairing(self, code: str, device_response: Callable[[], bool]) -> bool:
         if _using_external_gui:
-            # The user can't see the pairing in the terminal. The
-            # output format is also not appropriate for parsing by
-            # external tools doing inter process communication using
-            # stdin/stdout. For now, we direct the user to pair in the
-            # BitBoxApp instead.
-            raise DeviceNotReadyError(_unpaired_errmsg)
+            # Only the explicit pairing command may exchange messages with
+            # a GUI. Normal commands retain their single JSON response.
+            raise PairingRequiredError(_unpaired_errmsg)
 
         print("Please compare and confirm the pairing code on your BitBox02:")
         print(code)
@@ -165,6 +164,20 @@ class CLINoiseConfig(util.BitBoxAppNoiseConfig):
             sys.stderr.write(
                 "Your BitBox02 might not be genuine. Please contact support@shiftcrypto.ch if the problem persists.\n"
             )
+
+
+class AppNoiseConfig(CLINoiseConfig):
+    """Keep the Noise handshake alive while a parent application confirms it."""
+
+    def __init__(self, pairing_callback: PairingCallback) -> None:
+        super().__init__()
+        self.pairing_callback = pairing_callback
+
+    def show_pairing(self, code: str, device_response: Callable[[], bool]) -> bool:
+        self.pairing_callback("confirm_code", code)
+        if not device_response():
+            raise ActionCanceledError("Pairing rejected on BitBox02")
+        return True
 
 
 def _keypath_hardened_prefix(keypath: Sequence[int]) -> Sequence[int]:
@@ -329,6 +342,10 @@ class Bitbox02Client(HardwareWalletClient):
 
     def set_noise_config(self, noise_config: BitBoxNoiseConfig) -> None:
         self.noise_config = noise_config
+
+    def pair_device(self, pairing_callback: PairingCallback) -> None:
+        self.set_noise_config(AppNoiseConfig(pairing_callback))
+        self.init(expect_initialized=None)
 
     def init(self, expect_initialized: Optional[bool] = True) -> bitbox02.BitBox02:
         if self.bb02 is not None:

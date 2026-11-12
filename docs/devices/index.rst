@@ -75,13 +75,54 @@ Bluetooth transport is not included.
 On the first connection, approve HWI on the Trezor and enter its six-digit
 pairing code at the terminal prompt. Pairing prompts go to stderr so command
 results on stdout remain JSON. Pairing credentials are stored in the OS
-keyring under ``hwi.trezor-thp``. If a keyring is unavailable, credentials
-remain in memory for the current process; subsequent processes may need to
-pair again. PINs and wallet passphrases are entered on the device.
+keyring under ``hwi.trezor-thp``. Pairing reports an error if credentials cannot
+be saved; unlock or configure the OS keyring before retrying. PINs and wallet
+passphrases are entered on the device.
 
 Applications using the Python API can supply a ``pairing_code_callback`` to
 ``hwilib.devices.trezor.TrezorClient``. It takes no arguments and returns the
-six-digit code as a string. Without this callback, HWI uses a terminal prompt.
+six-digit code as a string. Without this callback, HWI uses a terminal prompt
+only when stdin, stdout, and stderr are terminals. Enumeration never prompts
+for a pairing code.
+
+Pairing from a parent application
+================================
+
+Unpaired Trezor THP and BitBox02 devices report ``PAIRING_REQUIRED`` (``-20``)
+and ``needs_pairing: true``. Enumeration includes their type, path, and model
+without requiring a fingerprint. The parent application can then launch::
+
+    hwi -t trezor -d <device-path> pair --stdio
+
+Use ``-t bitbox02`` for a BitBox02. An explicit type and path are required;
+do not use ``-f`` or the global ``--stdin`` argument-input option for pairing.
+Keep this same child process alive until pairing finishes. HWI does not spawn
+a helper process or a server.
+
+Each message is one newline-terminated JSON object. HWI flushes its request
+on stdout before waiting for a response on stdin. Both devices use the same
+request shape::
+
+    {"event":"pairing_required","method":"enter_code","code":null}
+    {"event":"pairing_required","method":"confirm_code","code":"ABCDE FGHIJ\nKLMNO PQRST"}
+
+``enter_code`` asks the GUI to collect the six digits displayed on Trezor;
+``confirm_code`` asks it to display and compare the BitBox02 code. Respond::
+
+    {"accept":true,"code":"012345"}
+
+For BitBox02, use ``{"accept":true,"code":null}``; approval on the device is
+also required. Either dialog can reject with ``{"accept":false,"code":null}``.
+Closing stdin cancels a pending request. Responses are limited to 4096
+characters, including the newline.
+
+HWI then writes its final ``{"success":true}`` or normal ``error``/``code``
+response and exits. An already-paired device can return success immediately.
+All human-readable diagnostics go to stderr. The parent should provide a
+timeout and terminate/reap the child when the user cancels or the app closes.
+Do not log pairing responses. Normal HWI commands continue to return one JSON
+result per run. Completed credentials are reused by later processes; BitBox02
+uses its existing BitBoxApp-compatible storage and Trezor uses the OS keyring.
 
 Support Policy
 ================

@@ -37,6 +37,7 @@ from ..errors import (
     handle_errors,
 )
 from .trezorlib.client import TrezorClient as Trezor, PASSPHRASE_ON_DEVICE
+from .._pairing import PairingCallback
 from .trezorlib.debuglink import TrezorClientDebugLink
 from .trezorlib.exceptions import Cancelled, TrezorFailure
 from .trezorlib.models import TrezorModel
@@ -298,12 +299,14 @@ class TrezorClient(HardwareWalletClient):
         sim_path: str = SIMULATOR_PATH,
         model: Optional[TrezorModel] = None,
         pairing_code_callback: Optional[Callable[[], str]] = None,
+        allow_pairing: bool = True,
     ) -> None:
         if password is None:
             password = ""
         super(TrezorClient, self).__init__(path, password, expert, chain)
         self._thp_client: Optional['TrezorThpClient'] = None
         self._pairing_code_callback = pairing_code_callback
+        self._allow_pairing = allow_pairing
         self.simulator = False
         transport = get_path_transport(path, hid_ids, webusb_ids, sim_path)
         if path.startswith('udp'):
@@ -339,7 +342,7 @@ class TrezorClient(HardwareWalletClient):
                     "This Trezor requires THP. Install HWI's trezor>=0.20.2,<0.21 dependency."
                 ) from import_error
             self._thp_client = TrezorThpClient(
-                transport, PassphraseUI(self.password or ""), self._pairing_code_callback,
+                transport, PassphraseUI(self.password or ""), self._pairing_code_callback, self._allow_pairing,
             )
             self.client = self._thp_client
             resp = self.client.features
@@ -355,6 +358,13 @@ class TrezorClient(HardwareWalletClient):
                 self.client.ensure_unlocked()
             except TrezorFailure:
                 self.client.init_device()
+
+    def pair_device(self, pairing_callback: PairingCallback) -> None:
+        self._pairing_code_callback = lambda: pairing_callback("enter_code", None)
+        self._allow_pairing = True
+        self._prepare_device()
+        if self._thp_client is None:
+            raise UnavailableActionError("This Trezor uses the legacy protocol and does not require pairing")
 
     def _check_unlocked(self, *, wallet_session: bool = True) -> None:
         self._prepare_device()
@@ -943,10 +953,13 @@ def enumerate(password: Optional[str] = None, expert: bool = False, chain: Chain
 
         d_data['type'] = 'trezor'
         d_data['path'] = dev.get_path()
+        d_data['model'] = 'trezor'
+        d_data['needs_pin_sent'] = False
+        d_data['needs_passphrase_sent'] = False
 
         client = None
         with handle_errors(common_err_msgs["enumerate"], d_data):
-            client = TrezorClient(d_data['path'], password)
+            client = TrezorClient(d_data['path'], password, allow_pairing=False)
             try:
                 client._prepare_device()
             except TypeError:

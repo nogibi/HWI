@@ -22,7 +22,7 @@ from trezorlib.transport import Transport as NativeTransport
 from trezorlib.transport.udp import UdpTransport
 from trezorlib.transport.webusb import WebUsbTransport
 
-from ..errors import BadArgumentError, DeviceConnectionError, DeviceNotReadyError
+from ..errors import BadArgumentError, DeviceConnectionError, DeviceNotReadyError, PairingRequiredError
 from .trezorlib import mapping as legacy_mapping, messages as legacy_messages
 from .trezorlib.client import TrezorClient as LegacyClient
 from .trezorlib.exceptions import Cancelled
@@ -64,8 +64,8 @@ def _load_credentials() -> List[Credential]:
 
 def _save_credential(credential: Credential) -> None:
     global _credentials
-    _credentials = [c for c in _load_credentials() if c.trezor_pubkey != credential.trezor_pubkey]
-    _credentials.append(credential)
+    updated = [c for c in _load_credentials() if c.trezor_pubkey != credential.trezor_pubkey]
+    updated.append(credential)
     try:
         stored = [
             {
@@ -73,11 +73,12 @@ def _save_credential(credential: Credential) -> None:
                 "host_privkey": c.host_privkey.hex(),
                 "credential": c.credential.hex(),
             }
-            for c in _credentials
+            for c in updated
         ]
         keyring.set_password(KEYRING_SERVICE, "credentials", json.dumps(stored))
-    except Exception:
-        LOG.warning("Cannot save Trezor pairing credentials to the OS keyring; they will last only for this process")
+    except Exception as e:
+        raise DeviceNotReadyError("Cannot save Trezor pairing credentials to the OS keyring; unlock or configure the keyring and pair again") from e
+    _credentials = updated
 
 
 def _prompt_pairing_code() -> str:
@@ -110,6 +111,7 @@ class TrezorThpClient(LegacyClient):
         transport: Transport,
         ui: Any,
         pairing_code_callback: Optional[Callable[[], str]] = None,
+        allow_pairing: bool = True,
     ) -> None:
         native_transport: NativeTransport
         if isinstance(transport, LegacyWebUsbTransport):
@@ -121,7 +123,8 @@ class TrezorThpClient(LegacyClient):
 
         self._wallet_session: Optional[ThpSession] = None
         self._closed = False
-        self._pairing_code_callback = pairing_code_callback or _prompt_pairing_code
+        self._pairing_code_callback = pairing_code_callback
+        self._allow_pairing = allow_pairing
         app = AppManifest(
             app_name="HWI",
             credentials=_load_credentials,
@@ -148,16 +151,25 @@ class TrezorThpClient(LegacyClient):
                 self._session = self._native.get_session(passphrase=PassphraseSetting.NONE)
                 self.refresh_features()
             except BaseException:
-                native_transport.close()
+                try:
+                    if hasattr(self, "_native"):
+                        self._native.channel.close()
+                finally:
+                    native_transport.close()
                 raise
 
     def _pair(self) -> None:
         self._native.connect()
         if not self._native.pairing.is_paired():
+            if not self._allow_pairing or (
+                self._pairing_code_callback is None
+                and not all(stream is not None and stream.isatty() for stream in (sys.stdin, sys.stdout, sys.stderr))
+            ):
+                raise PairingRequiredError(model="trezor_" + self._native.model.internal_name.lower())
             print("Confirm the HWI connection on your Trezor device", file=sys.stderr)
             credential = default_pairing_flow(
                 self._native.pairing,
-                code_entry_callback=self._pairing_code_callback,
+                code_entry_callback=self._pairing_code_callback or _prompt_pairing_code,
                 request_credential=True,
             )
             if credential is not None:

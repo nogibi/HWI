@@ -33,6 +33,7 @@ NEED_TO_BE_ROOT = -16 #: User needs to be root to perform action
 HELP_TEXT = -17 #: Help text was requested by the user
 DEVICE_NOT_INITIALIZED = -18 #: Device is not initialized
 INVALID_POLICY = -19 #: Supplied descriptor cannot become a valid BIP 388 wallet policy
+PAIRING_REQUIRED = -20 #: Device must be paired with this application
 
 # Exceptions
 class HWWError(Exception):
@@ -71,6 +72,12 @@ class HWWError(Exception):
 
     def __str__(self) -> str:
         return self.msg
+
+class PairingRequiredError(HWWError):
+    def __init__(self, msg: str = "Device requires pairing. Use 'pair --stdio'.", model: Optional[str] = None):
+        super().__init__(msg, PAIRING_REQUIRED)
+        self.model = model
+
 
 class NoPasswordError(HWWError):
     """
@@ -245,6 +252,10 @@ def handle_errors(
     except HWWError as e:
         result['error'] = msg + e.get_msg()
         result['code'] = e.get_code()
+        if isinstance(e, PairingRequiredError):
+            result['needs_pairing'] = True
+            if e.model is not None:
+                result['model'] = e.model
     except Exception as e:
         result['error'] = msg + str(e)
         result['code'] = code

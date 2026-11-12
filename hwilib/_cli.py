@@ -35,6 +35,7 @@ from .errors import (
     UNKNOWN_ERROR,
 )
 from .hwwclient import HardwareWalletClient
+from ._pairing import request_pairing
 from . import __version__
 
 import argparse
@@ -52,6 +53,11 @@ from typing import (
     Optional,
     Union,
 )
+
+
+def pair_device_handler(args: argparse.Namespace, client: HardwareWalletClient) -> Dict[str, bool]:
+    client.pair_device(request_pairing)
+    return {"success": True}
 
 
 def backup_device_handler(args: argparse.Namespace, client: HardwareWalletClient) -> Dict[str, bool]:
@@ -165,6 +171,10 @@ def get_parser() -> HWIArgumentParser:
 
     enumerate_parser = subparsers.add_parser('enumerate', help='List all available devices')
     enumerate_parser.set_defaults(func=enumerate_handler)
+
+    pair_parser = subparsers.add_parser('pair', help='Pair a device through newline-delimited JSON on stdin/stdout')
+    pair_parser.add_argument('--stdio', action='store_true', required=True, help='Exchange pairing messages with a parent application')
+    pair_parser.set_defaults(func=pair_device_handler)
 
     getmasterxpub_parser = subparsers.add_parser('getmasterxpub', help='Get the extended public key for BIP 44 standard derivation paths. Convenience function to get xpubs given the address type, account, and chain type.')
     getmasterxpub_parser.add_argument("--addr-type", help="Get the master xpub used to derive addresses for this address type", type=AddressType.argparse, choices=list(AddressType), default=AddressType.WIT) # type: ignore
@@ -306,6 +316,8 @@ def process_commands(cli_args: List[str]) -> Any:
         return result
 
     # Auto detect if we are using fingerprint or type to identify device
+    if command == 'pair' and (not device_type or not device_path or args.fingerprint):
+        return {'error': 'Pairing requires an explicit device type and path', 'code': MISSING_ARGUMENTS}
     if args.fingerprint or (args.device_type and not args.device_path):
         client = find_device(args.password, args.device_type, args.fingerprint, args.expert, args.chain, args.allow_emulators)
         if not client:
