@@ -208,8 +208,12 @@ class TrezorThpClient(LegacyClient):
     def refresh_features(self) -> legacy_messages.Features:
         with _thp_errors():
             features = self._native.refresh_features()
-            converted = self.mapping.decode(*self._native.mapping.encode(features))
-            assert isinstance(converted, legacy_messages.Features)
+            # Re-encoding rejects enum values introduced by newer firmware.
+            converted = legacy_messages.Features(**{
+                field.name: getattr(features, field.name)
+                for field in legacy_messages.Features.FIELDS.values()
+                if hasattr(features, field.name)
+            })
             self._refresh_features(converted)
             return converted
 
