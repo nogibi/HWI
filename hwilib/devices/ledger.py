@@ -325,6 +325,9 @@ class LedgerClient(HardwareWalletClient):
                 if not ok:
                     continue
 
+                # BIP67 child-key order can vary by input; keep the sortedmulti policy stable.
+                key_exprs.sort()
+
                 # Make and register the MultisigWallet
                 msw = MultisigWallet(f"{k} of {len(key_exprs)} Multisig", script_addrtype, k, key_exprs)
                 msw_id = msw.id
